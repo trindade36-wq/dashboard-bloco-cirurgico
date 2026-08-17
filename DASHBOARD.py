@@ -5,47 +5,58 @@ st.set_page_config(page_title="Gestão de Bloco Cirúrgico", layout="wide")
 st.markdown("""
     <style>
         .block-container {padding-top: 1rem; padding-bottom: 0rem;}
-        div[data-testid="stMetricValue"] {font-size: 24px;}
+        div[data-testid="stMetricValue"] {font-size: 20px;}
     </style>
 """, unsafe_allow_html=True)
 
-# 1. Carregamento e Cálculos de Tempo
+# 1. Carregamento e Cálculos de Tempo Completos
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel("dados.xlsx", skiprows=3, header=None)
     
-    # Pegando as colunas principais e também as de datas e horas de Cirurgia e Limpeza
-    # 13,14 (Início Cirurgia) | 15,16 (Fim Cirurgia) | 21,22 (Início Limpeza) | 23,24 (Fim Limpeza)
-    cols = [0, 1, 2, 3, 4, 5, 6, 13, 14, 15, 16, 21, 22, 23, 24]
+    # Selecionando colunas de identificação e todas as etapas de data/hora relevantes
+    # 9,10 (Entrada Sala) | 11,12 (Início Anestesia) | 17,18 (Fim Anestesia) | 19,20 (Saída Sala)
+    # 21,22 (Início Limpeza) | 23,24 (Fim Limpeza) | 27,28 (UTI/Enfermaria)
+    cols = [0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24, 27, 28]
     df_sub = df.iloc[:, cols].dropna(subset=[0]).copy()
     
     df_sub.columns = [
         'ID', 'IDADE', 'SEXO', 'PORTE', 'ESPECIALIDADE', 'SALA', 'CID',
-        'D_INI_CIR', 'H_INI_CIR', 'D_FIM_CIR', 'H_FIM_CIR',
-        'D_INI_LIM', 'H_INI_LIM', 'D_FIM_LIM', 'H_FIM_LIM'
+        'D_ENT_SALA', 'H_ENT_SALA', 'D_INI_ANEST', 'H_INI_ANEST',
+        'D_FIM_ANEST', 'H_FIM_ANEST', 'D_SAIDA_SALA', 'H_SAIDA_SALA',
+        'D_INI_LIM', 'H_INI_LIM', 'D_FIM_LIM', 'H_FIM_LIM',
+        'D_UTI', 'H_UTI'
     ]
     
-    # Limpando espaços de texto
     for col in ['SEXO', 'PORTE', 'ESPECIALIDADE', 'SALA', 'CID']:
         df_sub[col] = df_sub[col].astype(str).str.strip()
         
     df_sub['IDADE'] = pd.to_numeric(df_sub['IDADE'], errors='coerce')
 
-    # TRUQUE DE MESTRE: Juntando Data e Hora para calcular os minutos exatos!
-    df_sub['Inicio_Cirurgia'] = pd.to_datetime(df_sub['D_INI_CIR'].astype(str).str[:10] + ' ' + df_sub['H_INI_CIR'].astype(str), errors='coerce')
-    df_sub['Fim_Cirurgia'] = pd.to_datetime(df_sub['D_FIM_CIR'].astype(str).str[:10] + ' ' + df_sub['H_FIM_CIR'].astype(str), errors='coerce')
-    df_sub['Inicio_Limpeza'] = pd.to_datetime(df_sub['D_INI_LIM'].astype(str).str[:10] + ' ' + df_sub['H_INI_LIM'].astype(str), errors='coerce')
-    df_sub['Fim_Limpeza'] = pd.to_datetime(df_sub['D_FIM_LIM'].astype(str).str[:10] + ' ' + df_sub['H_FIM_LIM'].astype(str), errors='coerce')
+    # Combinando Datas e Horas de forma segura
+    def combine_dt(d_col, h_col):
+        return pd.to_datetime(df_sub[d_col].astype(str).str[:10] + ' ' + df_sub[h_col].astype(str), errors='coerce')
 
-    # Calculando a duração em minutos
-    df_sub['Tempo_Cirurgia_Min'] = (df_sub['Fim_Cirurgia'] - df_sub['Inicio_Cirurgia']).dt.total_seconds() / 60
+    df_sub['Entrada_Sala'] = combine_dt('D_ENT_SALA', 'H_ENT_SALA')
+    df_sub['Inicio_Anestesia'] = combine_dt('D_INI_ANEST', 'H_INI_ANEST')
+    df_sub['Fim_Anestesia'] = combine_dt('D_FIM_ANEST', 'H_FIM_ANEST')
+    df_sub['Saida_Sala'] = combine_dt('D_SAIDA_SALA', 'H_SAIDA_SALA')
+    df_sub['Inicio_Limpeza'] = combine_dt('D_INI_LIM', 'H_INI_LIM')
+    df_sub['Fim_Limpeza'] = combine_dt('D_FIM_LIM', 'H_FIM_LIM')
+    df_sub['UTI_Enfermaria'] = combine_dt('D_UTI', 'H_UTI')
+
+    # Cálculo dos Tempos em Minutos
+    df_sub['Tempo_Cirurgia_Min'] = (df_sub['Fim_Limpeza'] - df_sub['Inicio_Limpeza']).dt.total_seconds() / 60 # ajuste caso use fim cirurgia
+    df_sub['Tempo_Anestesia_Min'] = (df_sub['Fim_Anestesia'] - df_sub['Inicio_Anestesia']).dt.total_seconds() / 60
+    df_sub['Tempo_Sala_Min'] = (df_sub['Saida_Sala'] - df_sub['Entrada_Sala']).dt.total_seconds() / 60
     df_sub['Tempo_Limpeza_Min'] = (df_sub['Fim_Limpeza'] - df_sub['Inicio_Limpeza']).dt.total_seconds() / 60
+    df_sub['Tempo_Saida_UTI_Horas'] = (df_sub['UTI_Enfermaria'] - df_sub['Saida_Sala']).dt.total_seconds() / 3600
 
     return df_sub
 
 df = carregar_dados()
 
-# 2. Barra Lateral (Os Filtros que afetam TODAS as páginas)
+# 2. Barra Lateral (Filtros)
 st.sidebar.header("🔍 Filtros Operacionais")
 
 df_filtrado = df.copy()
@@ -65,7 +76,7 @@ cid_selecionado = st.sidebar.selectbox("CID Principal:", cids)
 if cid_selecionado != "Todos":
     df_filtrado = df_filtrado[df_filtrado['CID'] == cid_selecionado]
 
-# 3. Criando as Páginas (Abas)
+# 3. Páginas (Abas)
 st.title("🏥 Gestão Estratégica - Bloco Cirúrgico")
 
 aba1, aba2, aba3 = st.tabs(["📊 Visão Geral", "⏱️ Tempos e Movimentos", "📋 Base de Dados"])
@@ -92,37 +103,55 @@ with aba1:
     st.subheader("📋 CIDs Mais Frequentes")
     st.bar_chart(df_filtrado['CID'].value_counts().head(10), horizontal=True)
 
-# ================= ABA 2: TEMPOS (GIRO DE SALA) =================
+# ================= ABA 2: TEMPOS E MOVIMENTOS =================
 with aba2:
-    st.markdown("### Eficiência do Bloco")
+    st.markdown("### ⏱️ Indicadores de Desempenho e Tempos Operacionais")
     
-    # Calculando médias gerais de tempo para os KPIs
-    media_cir = df_filtrado['Tempo_Cirurgia_Min'].mean()
-    media_limp = df_filtrado['Tempo_Limpeza_Min'].mean()
+    # Calculando estatísticas
+    m_anes = df_filtrado['Tempo_Anestesia_Min'].mean()
+    med_anes = df_filtrado['Tempo_Anestesia_Min'].median()
     
-    col_t1, col_t2, col_t3 = st.columns(3)
-    col_t1.metric("Tempo Médio de Cirurgia", f"{media_cir:.0f} min" if pd.notna(media_cir) else "N/A")
-    col_t2.metric("Tempo Médio de Limpeza", f"{media_limp:.0f} min" if pd.notna(media_limp) else "N/A")
-    col_t3.metric("Tempo Total de Giro Médio", f"{(media_cir + media_limp):.0f} min" if pd.notna(media_cir) else "N/A")
+    m_sala = df_filtrado['Tempo_Sala_Min'].mean()
+    med_sala = df_filtrado['Tempo_Sala_Min'].median()
+    
+    # Filtro para evitar inconsistências temporais negativas na admissão UTI
+    df_uti_valido = df_filtrado[df_filtrado['Tempo_Saida_UTI_Horas'] >= 0]
+    m_uti = df_uti_valido['Tempo_Saida_UTI_Horas'].mean()
+    med_uti = df_uti_valido['Tempo_Saida_UTI_Horas'].median()
+
+    # Linha 1 de Métricas (Anestesia e Permanência em Sala)
+    st.markdown("#### 💉 Anestesia & 🚪 Permanência em Sala")
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("Média Anestesia", f"{m_anes:.0f} min" if pd.notna(m_anes) else "N/A")
+    t2.metric("Mediana Anestesia", f"{med_anes:.0f} min" if pd.notna(med_anes) else "N/A")
+    t3.metric("Média Entrada ➔ Saída", f"{m_sala:.0f} min" if pd.notna(m_sala) else "N/A")
+    t4.metric("Mediana Entrada ➔ Saída", f"{med_sala:.0f} min" if pd.notna(med_sala) else "N/A")
+    
+    st.markdown("---")
+    
+    # Linha 2 de Métricas (Saída da Sala vs Admissão UTI/Enfermaria)
+    st.markdown("#### 🛏️ Intervalo: Saída de Sala ➔ Admissão UTI/Enfermaria")
+    u1, u2 = st.columns(2)
+    u1.metric("Tempo Médio (Saída ➔ UTI)", f"{m_uti:.1f} horas" if pd.notna(m_uti) else "N/A")
+    u2.metric("Tempo Mediano (Saída ➔ UTI)", f"{med_uti:.1f} horas" if pd.notna(med_uti) else "N/A")
     
     st.divider()
     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.subheader("🧹 Média de Limpeza por Sala (Minutos)")
-        # Agrupa o tempo médio de limpeza por sala
         if not df_filtrado.empty:
             limpeza_sala = df_filtrado.groupby('SALA')['Tempo_Limpeza_Min'].mean()
             st.bar_chart(limpeza_sala, color="#ff7f0e")
             
     with col_g2:
-        st.subheader("✂️ Média de Cirurgia por Especialidade (Minutos)")
+        st.subheader("⏳ Média de Permanência em Sala por Especialidade")
         if not df_filtrado.empty:
-            cirurgia_esp = df_filtrado.groupby('ESPECIALIDADE')['Tempo_Cirurgia_Min'].mean()
-            st.bar_chart(cirurgia_esp, color="#2ca02c")
+            sala_esp = df_filtrado.groupby('ESPECIALIDADE')['Tempo_Sala_Min'].mean()
+            st.bar_chart(sala_esp, color="#2ca02c")
 
 # ================= ABA 3: BASE DE DADOS =================
 with aba3:
     st.markdown("### Extração de Dados")
     st.write("Visualize ou exporte a tabela abaixo com os filtros aplicados.")
-    st.dataframe(df_filtrado[['ID', 'IDADE', 'SEXO', 'ESPECIALIDADE', 'SALA', 'CID', 'Tempo_Cirurgia_Min', 'Tempo_Limpeza_Min']], use_container_width=True)
+    st.dataframe(df_filtrado[['ID', 'IDADE', 'SEXO', 'ESPECIALIDADE', 'SALA', 'CID', 'Tempo_Anestesia_Min', 'Tempo_Sala_Min']], use_container_width=True)
